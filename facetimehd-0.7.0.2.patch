@@ -1,0 +1,22 @@
+--- a/fthd_isp.c
++++ b/fthd_isp.c
+@@ -94,6 +94,9 @@
+ 	acpi_handle handle;
+ 	struct acpi_object_list arg_list;
+ 	union acpi_object args[1];
++	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
++	union acpi_object *result;
++	int ret = 0;
+ 
+ 	/* Get the CMRA device handle directly from ACPI namespace */
+ 	status = acpi_get_handle(NULL, FTHD_ACPI_CAMERA_PATH, &handle);
+@@ -127,6 +130,9 @@
+ 		ret = -EINVAL;
+ 	}
+ 
++pcie_only:
++	return 0;
++
+ out:
+ 	kfree(buffer.pointer);
+ 	return ret;

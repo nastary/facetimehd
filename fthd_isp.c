@@ -81,23 +81,31 @@ int isp_mem_destroy(struct isp_mem_obj *obj)
 	return 0;
 }
 
+/*
+ * Macbook10,1 specific ACPI path for the camera sensor power control.
+ * The CMPE method is defined in the DSDT at _SB_.PCI0.RP10.CMRA.CMPE.
+ * The PCI device's ACPI handle is NOT the same as the CMRA device handle.
+ */
+#define FTHD_ACPI_CAMERA_PATH "\\_SB_.PCI0.RP10.CMRA"
+
 static int isp_acpi_set_power(struct fthd_private *dev_priv, int power)
 {
 	acpi_status status;
 	acpi_handle handle;
 	struct acpi_object_list arg_list;
-	struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
 	union acpi_object args[1];
+	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
 	union acpi_object *result;
 	int ret = 0;
 
-
-	handle = ACPI_HANDLE(&dev_priv->pdev->dev);
-	if(!handle) {
-		dev_err(&dev_priv->pdev->dev,
-			"Failed to get S2 CMPE ACPI handle\n");
-		ret = -ENODEV;
-		goto out;
+	/* Get the CMRA device handle directly from ACPI namespace */
+	status = acpi_get_handle(NULL, FTHD_ACPI_CAMERA_PATH, &handle);
+	if (ACPI_FAILURE(status)) {
+		dev_warn(&dev_priv->pdev->dev,
+			"Cannot resolve camera ACPI handle %s (status 0x%08x), "
+			"attempting PCIe power management only\n",
+			FTHD_ACPI_CAMERA_PATH, (unsigned)status);
+		goto pcie_only;
 	}
 
 	args[0].type = ACPI_TYPE_INTEGER;
@@ -121,6 +129,9 @@ static int isp_acpi_set_power(struct fthd_private *dev_priv, int power)
 			"Invalid ACPI response (len: %Ld)\n", buffer.length);
 		ret = -EINVAL;
 	}
+
+pcie_only:
+	return 0;
 
 out:
 	kfree(buffer.pointer);
@@ -631,18 +642,22 @@ int fthd_isp_cmd_channel_info(struct fthd_private *dev_priv)
 	memset(&cmd, 0, sizeof(cmd));
 	len = sizeof(cmd);
 	ret = fthd_isp_cmd(dev_priv, CISP_CMD_CH_INFO_GET, &cmd, sizeof(cmd), &len);
-	print_hex_dump_bytes("CHINFO ", DUMP_PREFIX_OFFSET, &cmd, sizeof(cmd));
-	pr_debug("sensor id: %04x %04x\n", cmd.sensorid0, cmd.sensorid1);
-	pr_debug("sensor count: %d\n", cmd.sensor_count);
-	pr_debug("camera module serial number string: %s\n", cmd.camera_module_serial_number);
-	pr_debug("sensor serial number: %02X%02X%02X%02X%02X%02X%02X%02X\n",
-		 cmd.sensor_serial_number[0], cmd.sensor_serial_number[1],
-		 cmd.sensor_serial_number[2], cmd.sensor_serial_number[3],
-		 cmd.sensor_serial_number[4], cmd.sensor_serial_number[5],
-		 cmd.sensor_serial_number[6], cmd.sensor_serial_number[7]);
+	dev_info(&dev_priv->pdev->dev,
+		 "CH_INFO_GET ret=%d len=%d sensor ids %04x/%04x count=%u\n",
+		 ret, len, cmd.sensorid0, cmd.sensorid1, cmd.sensor_count);
+	print_hex_dump(KERN_INFO, "facetimehd CHINFO ", DUMP_PREFIX_OFFSET,
+		       16, 1, &cmd, sizeof(cmd), false);
+	if (ret)
+		return ret;
+
 	dev_priv->sensor_id0 = cmd.sensorid0;
 	dev_priv->sensor_id1 = cmd.sensorid1;
 	dev_priv->sensor_count = cmd.sensor_count;
+
+	if (dev_priv->sensor_count == 0)
+		dev_warn(&dev_priv->pdev->dev,
+			 "Firmware reported zero camera sensors; stream may fail\n");
+
 	return ret;
 }
 
